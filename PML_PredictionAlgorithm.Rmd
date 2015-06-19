@@ -1,0 +1,265 @@
+---
+title: "Predicting The Performance Of A Weight Lifting Activity"
+author: "Devi"
+date: "June 12, 2015"
+output: html_document
+---
+
+**Synopsis**  
+
+This report outlines an approach to use the supplied datasets to predict the labels(performance class) for the 20 new test set observations using feature selection and a cross validated random forest model which achieves over 99% cross validation accuracy and 20/20 correct on the test data.
+This report uses data from accelerometers sensors on the belt, forearm, arm, and dumbell of 6 participants and predict how well they were doing the exercise in terms of the classification in the data.
+
+**Basic Startup**
+
+```{r chunk1}
+#install the packages and load these libraries
+library(caret)
+library(kernlab)
+library(randomForest)
+library(gbm)
+library(e1071)
+library(corrplot)
+
+```
+
+**Downloading the Data**  
+
+  The training and test datasets are downloaded into the current working directory using the below links originally from http://groupware.les.inf.puc-rio.br/har.
+  
+The training dataset consists of accelerometer data and a label identifying the quality of the activity the participant was doing.The testing dataset consists of accelerometer data without the identifying label. 
+
+
+```{r chunk2}
+# code for downloading files to local machine and saving into working directory
+
+# trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+# testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+# trainFile <- "./data/pml-training.csv"
+# testFile  <- "./data/pml-testing.csv"
+# if (!file.exists("./data")) {
+#   dir.create("./data")
+# }
+# if (!file.exists(trainFile)) {
+#   download.file(trainUrl, destfile=trainFile, method="curl")
+# }
+# if (!file.exists(testFile)) {
+#   download.file(testUrl, destfile=testFile, method="curl")
+# }
+
+```
+
+
+**Reading the Data**
+
+```{r chunk3, echo=TRUE}
+#Reading the data into the dataframes and convert all the nonvalid entries to 'NA'
+pml_train <- read.csv("C:/Users/V/Desktop/Coursera/8_PML/Jun2015/pml-training.csv",
+                      header = T,na.strings=c("NA","#DIV/0!",""))
+
+pml_test <- read.csv("C:/Users/V/Desktop/Coursera/8_PML/Jun2015/pml-testing.csv",
+                     header=T,na.strings=c("NA","#DIV/0!",""))
+
+```
+
+**Exploring the Data**
+
+```{r chunk4}
+#Check out the dimensions of the dataframes
+dim(pml_train)
+dim(pml_test)
+
+#Check out the "classe" variable in the train dataset
+summary(pml_train$classe)
+
+```
+
+The **"classe"** variable in the training set is the outcome to predict.The most abundant class is **Class A**.
+
+**Tidying the Data**
+
+Let's clean the data and get rid of nearZeroVariance covariates and NA values by removing those columns because that would create a lot of noise for the model.Also ,let's remove the first six columns that acted as identifiers for the experiment as they are meaningless variables.
+
+```{r chunk5}
+# remove variables with nearly zero variance
+nzv <- nearZeroVar(pml_train)
+nzv 
+pml_train <- pml_train[,-nzv] 
+pml_test <- pml_test[,-nzv] 
+
+# remove variables that contain NA missing values 
+pml_train_NA <- pml_train[,!apply(pml_train,2,function(x) any(is.na(x)) )] 
+pml_test_NA <- pml_test[,!apply(pml_test,2,function(x) any(is.na(x)) )]
+
+dim(pml_train_NA)
+dim(pml_test_NA)
+
+```
+
+**Feature Selection**
+
+```{r chunk6}
+# remove categorical variables that are meaningless ("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp"", "num_window")
+pml_train_Clean <- pml_train_NA[, -c(1:6)]
+pml_test_Clean <- pml_test_NA[, -c(1:6)]
+
+dim(pml_train_Clean)
+dim(pml_test_Clean)
+
+```
+
+**Data Partitioning**
+
+Now,we can split the cleaned training set into a pure training data set(p1) (70%) and a validation data set(p2) (30%).We will use the validation data set to conduct cross validation in future steps.
+
+
+```{r chunk7, echo=TRUE}
+#Create the training and test sets
+set.seed(10) # For reproducible purpose
+inTrain <- createDataPartition(y=pml_train_Clean$classe, p=0.7,list=F)
+p1 <- pml_train_Clean[inTrain, ]  # 70% of data
+p2 <- pml_train_Clean[-inTrain, ] # 30% of data
+
+dim(p1)
+dim(p2)
+
+```
+
+**Model Building**  
+
+We will use the top two algorithms for prediction ie **Random Forest** and **Gradient Boosting Machine Models**.Random Forest automatically selects important variables and is robust to correlated covariates & outliers in general.
+Also,we will use a  **3-fold cross validation** when applying the algorithms and compare their performances.
+
+To capture the execution time, on my 2009 Dell Model N5110 (2.30 GHz Intel Core i3-2350M CPU and  4GB RAM with 64-bit Windows 7 Operating System ),I've used proc.time().
+
+
+**Model Fitting using Cross Validation**
+
+```{r chunk8}
+# Random Forests Model
+set.seed(10) # For reproducible purpose
+controlRf <- trainControl(method="cv", number=3, verboseIter=F)
+ptm <- proc.time()
+#fit RandomForest model on p1 dataset
+modelRf <- train(classe ~ ., data=p1, method="rf", trControl= controlRf)
+proc.time()- ptm
+modelRf
+varImp(modelRf)
+
+#print final model to see the chosen tuning parameters by the algorithm 
+modelRf$finalModel
+
+```
+
+
+```{r chunk9 }
+# # Gradient Boosting Machine Model
+set.seed(10) #for reproducible purpose
+controlGbm <- trainControl(method="cv", number=3, verboseIter=F)
+ptm <- proc.time()
+#fit GradientBoosting model on p1 dataset
+modelGbm <- train(classe ~ ., data=p1, method="gbm",trControl=controlGbm,verbose=F)
+proc.time()- ptm
+modelGbm
+# print final model
+modelGbm$finalModel
+
+```
+
+
+**Model Evaluation and Selection**  
+
+Then, we predict the "classe"" variable on the validation data set(p2) using the fitted model.The confusion matrix displays the comparison between predicted and actual values.
+
+
+```{r chunk10}
+predictRf <- predict(modelRf, p2)
+confusionMatrix(p2$classe, predictRf)
+
+predictGbm <- predict(modelGbm, p2)
+confusionMatrix(p2$classe, predictGbm)
+
+```
+
+**Accuracy and Out-Of-Sample Error Rate**   
+
+```{r chunk11}
+# Accuracy and OOSE for RandomForest Model
+a_Rf <- postResample(predictRf, p2$classe)
+a_Rf
+o_Rf <- 1 - as.numeric(confusionMatrix(p2$classe, predictRf)$overall[1])
+o_Rf
+
+# Accuracy and OOSE for GBM Model
+a_Gbm <- postResample(predictGbm, p2$classe)
+a_Gbm
+o_Gbm <- 1 - as.numeric(confusionMatrix(p2$classe,predictGbm)$overall[1])
+o_Gbm
+
+```
+
+So, the estimated accuracy of the RandomForest Model is **99.42%** and the estimated out-of-sample error is **0.58%** while the estimated accuracy of the GradientBoosting Model is **96.3%** and the estimated out-of-sample error rate is  **0.37%**.
+
+Since the RandomForest algorithm is showing better accuracy compared to GradientBoostingMachine algorithm ,we will select the RandomForest model and apply it for predicting values for the test dataset.
+
+**Re-fit Selected Model on the full training set**  
+
+This step is done so that we get the most accurate predictions.
+
+```{r chunk 12}
+# re-fit model using full training set (pml_train_Clean)
+ptm <- proc.time()
+rFTrain <- randomForest(classe ~ ., data = pml_train_Clean,mtry = 27,importance=TRUE)
+proc.time()-ptm
+rFTrain
+
+predTrain <- predict(rFTrain)
+
+```
+
+**Predicting for Test Data Set** 
+
+Let's predict the values for the test dataset by using the RandomForest model.
+
+```{r chunk13}
+#predict on test set
+result <- predict(modelRf, newdata=pml_test_Clean)
+
+# convert predictions to character vector
+result <- as.character(result)
+result
+
+# create function to write predictions to files
+pml_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# create prediction files to submit
+pml_write_files(result)
+
+```
+
+
+**Appendix : Figures**  
+
+```{r chunk14}
+#Correlation Matrix Visualization
+corrPlot <- cor(p1[, -length(names(p1))])
+corrplot(corrPlot, method="color")
+
+#Plot for the partitioned training dataset with RandomForests Algorithm
+plot(modelRf)
+
+#Plot for the full training dataset with RandomForests Algorithm
+varImpPlot(rFTrain)
+
+``` 
+
+**Conclusion**
+
+The Random Forests algorithm appears to perform very well for predicting activities from accelerometers measurements.
+
